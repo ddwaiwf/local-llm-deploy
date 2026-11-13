@@ -255,6 +255,147 @@ powershell -NoProfile -Command "if (Test-Path 'D:\AI\ninfer-local\runtime\dsh-ho
 
 ---
 
+### 坑 7 补充：2026-11-13 的最终结论（前面那套不够）
+
+上面写的"管理员跑一次 mklink"只解决了表面。真正的病根是三件事叠加：
+
+**① `scripts/configure-dsh.mjs` 每次启动都删 `profiles/node_modules`**
+
+```js
+for (const legacyPath of [
+  path.join(root, 'runtime/node_modules'),
+  path.join(root, 'node_modules'),
+  path.join(home, 'node_modules'),
+  path.join(home, 'profiles/node_modules'),   // ← 就是这行
+  path.join(profile, 'node_modules'),
+  path.join(profile, '.dsh-module-fallback'),
+]) {
+  removeLegacyFallbackDir(legacyPath);
+}
+```
+
+注释说"清理旧 junction，避免 chokidar 遇到 NTFS junction realpath 报错"。但它把 dsh 自己需要的模块链接也删了。
+
+**② dsh 需要 240 个包的链接，不是一个**
+
+dsh 从 `runtime/dsh-home/profiles/web/` 加载插件，Node 往上找 `node_modules` 时**到不了** `integrations/dsh/node_modules`。必须靠 `profiles/node_modules` 这一层 fallback 链接把 240 个 `@deepseek-ai/*` 包接进去。
+
+```
+Cannot find package '@deepseek-ai/cordis-plugin-timer' imported from
+  D:\AI\ninfer-local\runtime\dsh-home\profiles\web\
+```
+
+**③ 计划任务上下文建不了任何链接，Bash 上下文可以**
+
+实测对比（同一个 Node、同一份代码、同一个目标路径）：
+
+| 执行上下文 | `fs.symlinkSync(target, link, "junction")` |
+|---|---|
+| Git Bash 里直接跑 node | ✅ 成功 |
+| 计划任务启动的进程 | ❌ **EPERM** |
+
+所以 `start.cmd`（走计划任务）必挂，手动跑却能成功——这个差异极容易误判成"偶发问题"。
+
+---
+
+**最终解法（三步，缺一不可）**
+
+**第一步：改 `configure-dsh.mjs`，别删那个目录**
+
+```js
+for (const legacyPath of [
+  path.join(root, 'runtime/node_modules'),
+  path.join(root, 'node_modules'),
+  path.join(home, 'node_modules'),
+  // 保留：dsh 自己的模块回退链接在里面，删了就要重建，而计划任务建不了
+  // path.join(home, 'profiles/node_modules'),
+  path.join(profile, 'node_modules'),
+  path.join(profile, '.dsh-module-fallback'),
+]) {
+  removeLegacyFallbackDir(legacyPath);
+}
+```
+
+**第二步：批量建好 488 个链接（在普通权限的 shell 里跑）**
+
+```js
+// scripts/fix-dsh-links.js
+const fs = require("fs"), path = require("path");
+const SRC = "D:\\AI\\ninfer-local\\integrations\\dsh\\node_modules";
+const DST = "D:\\AI\\ninfer-local\\runtime\\dsh-home\\profiles\\node_modules";
+let made = 0, skipped = 0, failed = 0;
+
+function linkOne(srcDir, dstPath) {
+  try {
+    const st = fs.lstatSync(dstPath);
+    if (st.isSymbolicLink() || st.isDirectory()) { skipped++; return; }
+    fs.rmSync(dstPath, { force: true });
+  } catch {}
+  try {
+    fs.mkdirSync(path.dirname(dstPath), { recursive: true });
+    fs.symlinkSync(srcDir, dstPath, "junction");
+    made++;
+  } catch (e) { failed++; }
+}
+
+fs.mkdirSync(DST, { recursive: true });
+for (const name of fs.readdirSync(SRC)) {
+  if (name.startsWith(".")) continue;
+  const s = path.join(SRC, name);
+  if (!fs.statSync(s).isDirectory()) continue;
+  if (name.startsWith("@")) {
+    fs.mkdirSync(path.join(DST, name), { recursive: true });
+    for (const sub of fs.readdirSync(s)) {
+      const ss = path.join(s, sub);
+      if (!fs.statSync(ss).isDirectory()) continue;
+      linkOne(ss, path.join(DST, name, sub));
+    }
+  } else {
+    linkOne(s, path.join(DST, name));
+  }
+}
+console.log(`建立 ${made}，已存在 ${skipped}，失败 ${failed}`);
+```
+
+实测输出：`建立 488 个，已存在 0 个，失败 0 个`
+
+**第三步：改 dsh 代码，建不了链接时不要整死启动**
+
+`node_modules/@deepseek-ai/dsh-app-boot/lib/index.js` 的 `healProfilesModuleFallbackLocked`：
+
+```js
+function healProfilesModuleFallbackLocked(entries, modulesDir) {
+	for (const entry of entries) {
+		const link = join(modulesDir, entry.packageName);
+		mkdirSync(dirname(link), { recursive: true });
+		if (entry.kind === "proxy") { ensureModuleProxy(link, entry.packageName, entry.version, entry.targets); continue; }
+		try {
+			ensureSymlink(link, entry.packageDir);
+		} catch (error) {
+			// 受限账户（计划任务、锁定配置）建不了任何链接 —— EPERM。
+			if (error && (error.code === "EPERM" || error.code === "EACCES" || error.code === "EINVAL")) continue;
+			throw error;
+		}
+	}
+}
+```
+
+**验证**
+
+```bash
+node -e "console.log(require('fs').existsSync('D:/AI/ninfer-local/runtime/dsh-home/profiles/node_modules/@deepseek-ai/cordis-plugin-timer/package.json'))"
+# true
+
+curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:3080/"
+# 401（要求登录，说明服务活着）
+```
+
+**注意**：重装 NInfer 后链接会丢，需要重跑第二步。桌面上的 `修复 NInfer 网页启动.cmd` 就是干这个的（**不需要管理员**）。
+
+**教训**：遇到"手动能跑、脚本不行"，先对比**两个上下文的权限差异**，别急着改代码。这里 Git Bash 和计划任务的权限就不是一回事。
+
+---
+
 ### 坑 8：环境变量里 HTTPS_PROXY 和 https_proxy 重复，PowerShell 直接崩
 
 **现象**：跑启动脚本报
