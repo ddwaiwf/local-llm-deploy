@@ -12,7 +12,9 @@
 
 | 文件 | 作用 |
 |---|---|
-| `start-ninfer.cmd` | 启动 NInfer 27B（自动停掉 Strata），等就绪后开网页 |
+| `start-ninfer.cmd` | 启动 NInfer 27B（自动停掉 Strata），等 **3080 就绪**后开网页 |
+| `open-ninfer-web.cmd` | 用**当前最新 token** 打开 dsh 网页（token 每次重启会变，随时双击它） |
+| `make-dsh-shortcuts.py` | 生成/修正上面两个脚本（负责 GBK + CRLF 编码） |
 | `start-strata.cmd` | 启动 Strata 125B（自动停掉 NInfer），等就绪后开测试台 |
 | `stop-all.cmd` | 全部停止，并显示释放后的显存 |
 | `fix-ninfer-links.cmd` | 修复 dsh 网页的模块回退链接，**不需要管理员**，双击一次即可（调用 `fix-dsh-links.js`，批量建 488 个 junction） |
@@ -40,6 +42,16 @@
    ```powershell
    [IO.File]::WriteAllText($path, $text, [Text.Encoding]::GetEncoding(936))
    ```
+
+7. **dsh 网页的 token 每次重启都会变**。`@deepseek-ai/dsh-client-connection` 每次 activation
+   生成新的 secret（`randomBytes`），旧 token 和旧 cookie 立刻失效；不带 token 访问 3080
+   只返回一行 `dsh web authentication required; reopen the URL printed by dsh web.`，
+   界面里什么都没有。因此：
+   - 启动脚本必须**等 3080 真正 LISTENING** 再去读 `dsh.stdout.log`。
+     只等 1234（引擎）会读到上一次启动的旧 token —— 引擎比 dsh 起得快。
+   - 脚本里打印的必须是**完整带 token 的地址**，不能只打印 `http://127.0.0.1:3080`。
+   - 单独留一个 `open-ninfer-web.cmd`，任何时候双击都用当前最新 token 打开。
+   - 别把带 token 的地址存成书签，重启就失效；cookie 有效期内裸地址能进，但换浏览器就废。
 
 ---
 

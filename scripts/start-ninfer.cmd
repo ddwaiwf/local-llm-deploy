@@ -24,9 +24,9 @@ if errorlevel 1 (
   echo   启动前需要先做一次性修复。
   echo.
   echo   请先双击桌面上这个文件：
-  echo     修复 NInfer 启动（需管理员运行一次）.cmd
+  echo     修复 NInfer 网页启动.cmd
   echo.
-  echo   右键它 - 选择「以管理员身份运行」，只需一次。
+  echo   不需要管理员，双击即可，只需一次。
   echo   之后本文件就能正常双击启动了。
   echo  ------------------------------------------------------------
   echo.
@@ -71,11 +71,28 @@ if errorlevel 1 (
 )
 
 :openweb
+set /a w=0
+:waitweb
+netstat -an | findstr ":3080" | findstr "LISTENING" >nul 2>&1
+if not errorlevel 1 goto webok
+set /a w+=1
+if !w! geq 40 goto webfail
+ping -n 3 127.0.0.1 >nul 2>&1
+goto waitweb
+:webfail
+echo.
+echo   网页服务 3080 一直没起来。
+echo   可双击「修复 NInfer 网页启动.cmd」后重试。
+echo.
+pause
+exit /b 1
+:webok
+echo       网页服务已就绪。
 echo.
 echo  ============================================================
 echo    就绪
 echo  ============================================================
-echo    网页界面    http://127.0.0.1:3080
+echo    网页地址    见下方完整地址
 echo    接口 API    http://127.0.0.1:1234/v1
 echo    缓存网关    http://127.0.0.1:1236/v1
 echo.
@@ -85,6 +102,10 @@ echo.
 
 set "DSHURL="
 for /f "tokens=2" %%i in ('findstr /c:"dsh web: http" "D:\AI\ninfer-local\runtime\logs\dsh.stdout.log" 2^>nul') do set "DSHURL=%%i"
+echo.
+echo   完整网页地址（每次重启会变，请复制这一行）：
+echo   !DSHURL!
+echo.
 if defined DSHURL (
   echo  正在打开网页界面...
   start "" "!DSHURL!"
