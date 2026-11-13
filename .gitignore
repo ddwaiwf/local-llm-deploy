@@ -1,0 +1,10 @@
+*.log
+*.tmp
+*.part
+__pycache__/
+.venv*/
+node_modules/
+*.gguf
+*.ninfer
+*.tar.gz
+*.zip

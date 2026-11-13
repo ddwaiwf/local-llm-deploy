@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Strata 本地测试台</title>
+<style>
+  :root{
+    --bg:#FAFAF8; --panel:#FFFFFF; --line:#E6E4DD; --ink:#2C2C2A;
+    --muted:#888780; --accent:#0F6E56; --accent-bg:#E1F5EE;
+    --think:#8A8780; --think-bg:#F5F4EF; --warn:#A65A1D;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+    font-size:14px; line-height:1.6;
+  }
+  .wrap{max-width:820px; margin:0 auto; padding:20px 16px 28px}
+  header{
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    padding:14px 18px; background:var(--panel); border:1px solid var(--line);
+    border-radius:14px; margin-bottom:14px;
+  }
+  .dot{width:8px;height:8px;border-radius:50%;background:#22A06B;flex:0 0 auto;
+       box-shadow:0 0 0 3px rgba(34,160,107,.15)}
+  .dot.bad{background:#C0453A;box-shadow:0 0 0 3px rgba(192,69,58,.15)}
+  .title{font-weight:600}
+  .meta{color:var(--muted); font-size:12.5px}
+  .spacer{flex:1}
+  .badge{
+    font-size:12px; padding:3px 9px; border-radius:20px;
+    background:var(--accent-bg); color:var(--accent); font-weight:500;
+  }
+  .presets{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px}
+  .preset{
+    font-size:12.5px; padding:7px 12px; border-radius:9px; cursor:pointer;
+    background:var(--panel); border:1px solid var(--line); color:var(--ink);
+    transition:.15s;
+  }
+  .preset:hover{border-color:var(--accent); color:var(--accent); background:var(--accent-bg)}
+  .preset:disabled{opacity:.45; cursor:not-allowed}
+  #chat{
+    background:var(--panel); border:1px solid var(--line); border-radius:14px;
+    padding:16px; min-height:320px; max-height:60vh; overflow-y:auto;
+  }
+  .empty{color:var(--muted); text-align:center; padding:60px 20px; font-size:13.5px}
+  .msg{margin-bottom:16px; display:flex; flex-direction:column; gap:5px}
+  .role{font-size:11.5px; color:var(--muted); font-weight:500; letter-spacing:.3px}
+  .bubble{
+    padding:10px 14px; border-radius:12px; white-space:pre-wrap; word-break:break-word;
+  }
+  .user .bubble{background:#F0EEE7; align-self:flex-end; max-width:85%}
+  .bot .bubble{background:transparent; padding:0}
+  .think{
+    background:var(--think-bg); color:var(--think); border-left:2px solid #D9D6CC;
+    padding:8px 12px; border-radius:8px; font-size:12.5px; margin-bottom:8px;
+    max-height:150px; overflow-y:auto; white-space:pre-wrap;
+  }
+  .think::before{content:"思考过程"; display:block; font-size:10.5px;
+    letter-spacing:.5px; margin-bottom:4px; opacity:.7}
+  .answer{white-space:pre-wrap; word-break:break-word}
+  .answer code{
+    background:#F4F2EC; padding:1px 5px; border-radius:4px;
+    font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px;
+  }
+  .stats{
+    display:flex; gap:14px; flex-wrap:wrap; font-size:11.5px;
+    color:var(--muted); padding:6px 2px 0;
+  }
+  .stats b{color:var(--accent); font-weight:600}
+  .composer{
+    display:flex; gap:9px; margin-top:12px; align-items:flex-end;
+  }
+  textarea{
+    flex:1; resize:none; padding:11px 13px; border-radius:11px;
+    border:1px solid var(--line); background:var(--panel); color:var(--ink);
+    font-family:inherit; font-size:14px; line-height:1.5; min-height:46px; max-height:140px;
+    outline:none;
+  }
+  textarea:focus{border-color:var(--accent)}
+  button#send{
+    padding:0 20px; height:46px; border-radius:11px; border:none; cursor:pointer;
+    background:var(--accent); color:#fff; font-size:14px; font-weight:500;
+    font-family:inherit; transition:.15s;
+  }
+  button#send:hover{background:#0C5B47}
+  button#send:disabled{background:#B7C9C2; cursor:not-allowed}
+  .hint{font-size:11.5px; color:var(--muted); margin-top:8px; text-align:center}
+  .err{color:var(--warn)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <span class="dot" id="dot"></span>
+    <div>
+      <div class="title">Strata 本地测试台</div>
+      <div class="meta" id="modelInfo">正在检测服务…</div>
+    </div>
+    <span class="spacer"></span>
+    <span class="badge" id="ctxBadge">--</span>
+  </header>
+
+  <div class="presets">
+    <button class="preset" data-p="写一个 Python 函数，判断一个整数是否为质数，只给代码。">① 代码测试</button>
+    <button class="preset" data-p="用三句话解释什么是 MoE（混合专家）模型，以及它为什么能省显存。">② 知识测试</button>
+    <button class="preset" data-p="一个水池有甲乙两个进水管，甲管单独注满需 6 小时，乙管需 4 小时。两管同时开，多少小时注满？请给出计算过程。">③ 推理测试</button>
+    <button class="preset" data-p="请详细写一段 800 字左右的文章，介绍本地部署大模型的意义，要求条理清晰、有具体例子。">④ 长文测速</button>
+  </div>
+
+  <div id="chat"><div class="empty">点上面的测试按钮，或直接在下面输入问题<br>模型会边想边答，性能数据实时显示</div></div>
+
+  <div class="composer">
+    <textarea id="input" rows="1" placeholder="输入问题…（Enter 发送，Shift+Enter 换行）"></textarea>
+    <button id="send">发送</button>
+  </div>
+  <div class="hint">本地推理 · 数据不出本机 · 上下文 32768 tokens</div>
+</div>
+
+<script>
+const API = '/v1/chat/completions';
+const MODEL = 'qwen3.8-flash-next-iq2_xs';
+const chatEl = document.getElementById('chat');
+const inputEl = document.getElementById('input');
+const sendEl = document.getElementById('send');
+const dotEl = document.getElementById('dot');
+const modelInfoEl = document.getElementById('modelInfo');
+const ctxBadgeEl = document.getElementById('ctxBadge');
+let busy = false;
+
+// ---- 启动自检 ----
+(async () => {
+  try {
+    const r = await fetch('/v1/models');
+    const d = await r.json();
+    const m = d.data && d.data[0];
+    if (m) {
+      dotEl.classList.remove('bad');
+      modelInfoEl.textContent = `${m.id} · ${m.status?.value || 'unknown'}`;
+      ctxBadgeEl.textContent = `上下文 ${(m.meta?.n_ctx || 0).toLocaleString()}`;
+      if (m.meta?.n_ctx) document.querySelector('.hint').textContent =
+        `本地推理 · 数据不出本机 · 上下文 ${m.meta.n_ctx.toLocaleString()} tokens`;
+    }
+  } catch (e) {
+    dotEl.classList.add('bad');
+    modelInfoEl.innerHTML = '<span class="err">连不上 Strata 服务（127.0.0.1:8080）</span>';
+    modelInfoEl.nextElementSibling && 0;
+    ctxBadgeEl.textContent = '离线';
+  }
+})();
+
+// ---- 自动增高 ----
+inputEl.addEventListener('input', () => {
+  inputEl.style.height = 'auto';
+  inputEl.style.height = Math.min(inputEl.scrollHeight, 140) + 'px';
+});
+
+// ---- 渲染 ----
+function clearEmpty() {
+  const e = chatEl.querySelector('.empty');
+  if (e) e.remove();
+}
+
+function addMsg(role, text) {
+  clearEmpty();
+  const wrap = document.createElement('div');
+  wrap.className = 'msg ' + (role === 'user' ? 'user' : 'bot');
+  const tag = document.createElement('div');
+  tag.className = 'role';
+  tag.textContent = role === 'user' ? '你' : '模型';
+  wrap.appendChild(tag);
+  if (role === 'user') {
+    const b = document.createElement('div');
+    b.className = 'bubble';
+    b.textContent = text;
+    wrap.appendChild(b);
+  } else {
+    const t = document.createElement('div');
+    t.className = 'think';
+    t.style.display = 'none';
+    t.textContent = '';
+    const a = document.createElement('div');
+    a.className = 'answer';
+    a.textContent = '';
+    const s = document.createElement('div');
+    s.className = 'stats';
+    wrap.append(t, a, s);
+    wrap._think = t; wrap._answer = a; wrap._stats = s;
+  }
+  chatEl.appendChild(wrap);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return wrap;
+}
+
+function scroll() { chatEl.scrollTop = chatEl.scrollHeight; }
+
+// ---- 发送 + 流式解析 ----
+async function send(text) {
+  if (busy || !text.trim()) return;
+  busy = true;
+  sendEl.disabled = true;
+  document.querySelectorAll('.preset').forEach(b => b.disabled = true);
+
+  addMsg('user', text);
+  const box = addMsg('bot');
+  const thinkEl = box._think, answerEl = box._answer, statsEl = box._stats;
+
+  const t0 = performance.now();
+  let firstAt = null, thinkText = '', answerText = '', usage = null, timings = null;
+
+  try {
+    const resp = await fetch(API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: 'user', content: text }],
+        max_tokens: 1200,
+        stream: true
+      })
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n');
+      buf = lines.pop();
+
+      for (const raw of lines) {
+        const line = raw.trim();
+        if (!line.startsWith('data:')) continue;
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') continue;
+        let j;
+        try { j = JSON.parse(payload); } catch { continue; }
+
+        if (j.usage) usage = j.usage;
+        if (j.timings) timings = j.timings;
+
+        const d = j.choices?.[0]?.delta;
+        if (!d) continue;
+        if (firstAt === null) firstAt = performance.now();
+
+        if (d.reasoning_content) {
+          thinkText += d.reasoning_content;
+          thinkEl.style.display = 'block';
+          thinkEl.textContent = thinkText;
+          thinkEl.scrollTop = thinkEl.scrollHeight;
+        }
+        if (d.content) {
+          answerText += d.content;
+          answerEl.textContent = answerText;
+        }
+        scroll();
+      }
+    }
+  } catch (e) {
+    answerEl.innerHTML = `<span class="err">请求失败：${e.message}</span>`;
+  }
+
+  const totalMs = performance.now() - t0;
+  const firstMs = firstAt ? (firstAt - t0) : null;
+  const tok = usage?.completion_tokens || 0;
+  const genMs = timings?.predicted_ms || (totalMs - (firstMs || 0));
+  const tps = timings?.predicted_per_second || (tok > 1 ? tok / (genMs / 1000) : 0);
+  const acc = timings && timings.draft_n ? Math.round(timings.draft_n_accepted / timings.draft_n * 100) : null;
+
+  const parts = [];
+  if (firstMs) parts.push(`首 token <b>${(firstMs / 1000).toFixed(2)}s</b>`);
+  if (tok) parts.push(`输出 <b>${tok}</b> tokens`);
+  if (tps) parts.push(`速度 <b>${tps.toFixed(1)}</b> t/s`);
+  if (acc !== null) parts.push(`MTP 接受 <b>${acc}%</b>`);
+  if (usage?.prompt_tokens_details?.cached_tokens)
+    parts.push(`缓存命中 ${usage.prompt_tokens_details.cached_tokens}`);
+  statsEl.innerHTML = parts.join(' · ');
+
+  if (!answerText && !thinkText) answerEl.innerHTML = '<span class="err">没有收到内容</span>';
+  if (!answerText && thinkText) answerEl.textContent = '（只输出了思考，max_tokens 用完了）';
+
+  busy = false;
+  sendEl.disabled = false;
+  document.querySelectorAll('.preset').forEach(b => b.disabled = false);
+  scroll();
+}
+
+// ---- 事件 ----
+sendEl.addEventListener('click', () => {
+  const t = inputEl.value;
+  inputEl.value = '';
+  inputEl.style.height = 'auto';
+  send(t);
+});
+inputEl.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendEl.click();
+  }
+});
+document.querySelectorAll('.preset').forEach(b => {
+  b.addEventListener('click', () => send(b.dataset.p));
+});
+</script>
+</body>
+</html>

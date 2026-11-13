@@ -1,0 +1,6 @@
+# .cmd 是 GBK + CRLF，别让 Git 转换
+*.cmd binary
+*.bat binary
+*.py text eol=lf
+*.md text eol=lf
+*.json text eol=lf
