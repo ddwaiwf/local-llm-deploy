@@ -28,7 +28,49 @@
   hint: '任何兼容 /chat/completions 的服务' }
 ```
 
-### 配置步骤
+### 配置文件在哪（本机已接好）
+
+`C:\Users\123\AppData\Roaming\学习助手\studyhub-data.json`，`ai` 段就是全部 AI 配置。
+2026-11-13 已直接改好，接的是 **NInfer 27B**：
+
+| 字段 | 现在的值 | 说明 |
+|---|---|---|
+| `providerId` | `custom` | 自定义（OpenAI 兼容） |
+| `baseUrl` | `http://127.0.0.1:1236/v1` | NInfer 缓存守卫 |
+| `apiKey` | `local` | 本地不校验 |
+| `model` | `qwen3.8-27b-gsq-rco-iq3-xxs` | 以 `/v1/models` 为准 |
+| `mode` | `direct` | **最关键，见下** |
+
+`lib/ai.js::normalizeUrl()` 会把 `/v1` 自动补成 `/v1/chat/completions`；
+填完整的 `/chat/completions` 也能识别。
+
+### 最大的坑：`mode` 不是 `direct` 就不走本地
+
+`ai.mode` 只有两个值：
+
+- `direct` —— 直连上面配的 `baseUrl`，**接本地模型必须用这个**
+- `workbuddy` —— 把问题写成任务单据交给 WorkBuddy 队列，压根不读 `baseUrl`
+
+本机原配置就是 `workbuddy`。界面上 Base URL、模型名看着都填好了，实际一个字节
+都没发到本地服务。改配置时务必把 `mode` 一起改成 `direct`。
+
+### 一键切换脚本
+
+`scripts/connect-studyhub.py` 把五个字段、备份、还原都封装好了：
+
+```bash
+cd D:\AI\local-llm-deploy\scripts
+python connect-studyhub.py ninfer            # NInfer 27B（1236）
+python connect-studyhub.py strata            # Strata 125B（8080）
+python connect-studyhub.py --restore         # 还原成原来的云端 DeepSeek
+python connect-studyhub.py ninfer --fix-ping # 顺带修「测试连接」
+```
+
+- 每次自动备份 `studyhub-data.json.bak-<时间>-localmodel`（留在本地，不入库）
+- 脚本不含任何真实 API Key；还原靠备份，打印配置时对 Key 脱敏
+- 学习助手没开就直接打开；已开着会由 `onDataChanged` 自动重载磁盘改动
+
+### 界面里怎么填（等价于上面的脚本）
 
 1. 打开学习助手 → 设置 / AI 配置
 2. 提供商选「**自定义（OpenAI 兼容）**」
@@ -40,7 +82,8 @@
 | API Key | `local`（随便填，本地不校验） |
 | 模型 | `qwen3.8-flash-next-iq2_xs`<br>或 `qwen3.8-27b-gsq-rco-iq3-xxs` |
 
-4. 保存后先问一句"你好"确认连通
+4. 对话模式选「**直连模型**」，不要选「用 WorkBuddy 跑」
+5. 保存后先问一句"你好"确认连通
 
 ### 常见问题
 
@@ -50,6 +93,26 @@
 | 404 | Base URL 少了 `/v1` | 补上（Anthropic 端点才不带 `/v1`） |
 | 模型不存在 | 模型 ID 打错 | 访问 `http://127.0.0.1:8080/v1/models` 看准确 ID |
 | 回答很慢 | 上下文填太大 | 关掉其他吃显存的程序 |
+
+### 第二个坑：「测试连接」假阴性
+
+`lib/ai.js::ping()` 只给 `max_tokens: 16` 且非流式。NInfer / Strata 都是思考型模型，
+16 个 token 全花在 `reasoning_content` 上，`message.content` 返回空串，按钮显示
+「(空回复)」——其实连接是通的。改之前的实测：
+
+```json
+{"message":{"content":"","reasoning_content":"We need to respond..."},"finish_reason":"length"}
+```
+
+`chatStream()` 里也明确写了 `d.content || (d.reasoning_content ? '' : '')`，思考过程会被
+丢弃但正文照常显示，正常问答不受影响（学习助手给 4096 token）。
+
+已用**等长原地补丁**把 `16` 改成 `512`：从 `headers()` 里省掉一个可有可无的空格，
+抵掉多出来的 1 字节，asar 总长与所有文件 `offset/size` 都不变，**不用重打包**。
+补丁后实测 `content = "正常"`。备份是 `app.asar.bak-<时间>-localmodel`。
+验证：反向还原后与原版逐字节一致；两版 JS 语法检查都通过。
+
+> 不改程序也行：直接在学习助手里发一句真问题，比点「测试连接」更准。
 
 ### 两个模型交替用时注意
 
@@ -63,14 +126,55 @@
 
 ---
 
-## WorkBuddy（不支持 ❌）
+## WorkBuddy（支持 ✅ —— 这里之前写错过）
 
-WorkBuddy 用的是官方云端模型，`settings.json` 里没有任何模型/API 端点配置项，**没有接本地模型的入口**。
+早先只翻了 `~/.workbuddy/settings.json` 就下结论，没看程序本体，错误地写成「不支持」。
+实际上 `app.asar` 里有完整的本地模型子系统，三条路都能走：
 
-它作为客户端的价值在这里：
+| 路线 | 证据 | 说明 |
+|---|---|---|
+| 内置本地模型 | `~/.workbuddy/local-models/state.json` | 已下载且 `enabled: true`，自带 `llama-server.exe`（CUDA-13） |
+| Ollama provider | `settings.models.providers.ollama` = 「Ollama 本地」 | 默认 `localhost:11434` |
+| Custom provider | `settings.models.providers.custom` = 「自定义」 | 提供商一项写着「仅支持 OpenAI 兼容协议 API」 |
 
-- 可以**指挥它去操作**这两个本地服务（启动、停止、查日志、跑测试）
-- 但**不能把本地模型当成它的推理后端**
+内置模型读 GGUF 头确认是 `qwen35moe`，`Qwen36_35B A3B REAP ...`，41 层，
+`local_model.gguf` 15.79GB + `local_model.mmproj.gguf` 861MB（可看图）。
+`~/.workbuddy/models.json` 里已经有这一条：
+
+```json
+{
+  "id": "local_model", "name": "本地模型", "local": true,
+  "url": "http://127.0.0.1:52741/v1/chat/completions",
+  "maxInputTokens": 131072, "maxOutputTokens": 8192,
+  "supportsToolCall": true, "supportsImages": true, "supportsReasoning": true
+}
+```
+
+设置 → 模型里还有「添加模型 / 测试连接 / 本地模型管理（下载、切换、显存与内存要求）」。
+
+### 用 Custom 接 NInfer / Strata
+
+表单字段是从 `buildEmptyModelFormState()` 解出来的，界面文案：「供应商（仅支持 OpenAI 兼容协议 API）」「接口地址」「模型名称」「API Key」「工具调用」。
+
+| 字段 | 填什么 |
+|---|---|
+| 提供商 | 自定义 |
+| 接口地址 | `http://127.0.0.1:1236/v1/chat/completions`（NInfer）<br>`http://127.0.0.1:8080/v1/chat/completions`（Strata） |
+| 模型名称 | `qwen3.8-27b-gsq-rco-iq3-xxs` / `qwen3.8-flash-next-iq2_xs` |
+| API Key | 留空也行（界面明写「本地部署无需 API Key」），填 `local` 更保险 |
+| 工具调用 | 勾上，两个引擎都支持 |
+
+**接口地址要填完整的 `/chat/completions`**，不是只填 `/v1`：内置模型在 `models.json`
+里存的就是完整路径，界面占位符也是 `https://api.example.com/v1/chat/completions`。
+填完点「测试连接」。
+
+> 这条 Custom 路线本机还没实测连通，字段是从程序包里解出来的。若报 404，改成只填 `/v1` 再试。
+
+### 三个本地模型抢显存
+
+RTX 5080 只有 16GB。WorkBuddy 内置 35B（15.79GB）、NInfer 27B、Strata 125B
+**只能同时跑一个**。要用 WorkBuddy 内置模型，先双击桌面「停止所有模型.cmd」
+把 NInfer / Strata 停掉，否则会 OOM。
 
 ---
 
@@ -180,5 +284,6 @@ D:\AI\ninfer-local\runtime\logs\engine.stderr.log
 | 3080 | NInfer dsh 网页 |
 | 8080 | Strata 引擎 |
 | 8899 | 测试台代理 |
+| 52741 | WorkBuddy 内置本地模型的 llama-server（仅在启用内置模型时出现） |
 
 两个引擎不会同时占用——启动脚本会自动停掉另一个。

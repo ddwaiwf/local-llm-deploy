@@ -15,7 +15,8 @@
 | `start-ninfer.cmd` | 启动 NInfer 27B（自动停掉 Strata），等就绪后开网页 |
 | `start-strata.cmd` | 启动 Strata 125B（自动停掉 NInfer），等就绪后开测试台 |
 | `stop-all.cmd` | 全部停止，并显示释放后的显存 |
-| `fix-ninfer-symlink.cmd` | **需管理员运行一次**：修复 dsh 的符号链接 |
+| `fix-ninfer-links.cmd` | 修复 dsh 网页的模块回退链接，**不需要管理员**，双击一次即可（调用 `fix-dsh-links.js`，批量建 488 个 junction） |
+| `connect-studyhub.py` | 把「学习助手」的 AI 答疑切到 NInfer / Strata / 还原云端，见下 |
 
 ### 设计要点（改的时候别踩回去）
 
@@ -90,6 +91,34 @@ if is_stream:
         self.wfile.write(line)
         self.wfile.flush()      # ← 少了这行就变成"一次性吐完"
 ```
+
+---
+
+## 客户端接入：connect-studyhub.py
+
+把「学习助手」的 AI 答疑后端切到本地模型。改的是
+`C:\Users\<你>\AppData\Roaming\学习助手\studyhub-data.json` 里的 `ai` 段。
+
+```bash
+python connect-studyhub.py ninfer            # NInfer 27B（1236）
+python connect-studyhub.py strata            # Strata 125B（8080）
+python connect-studyhub.py --restore         # 还原最近一次备份
+python connect-studyhub.py ninfer --fix-ping # 顺带修「测试连接」假阴性
+```
+
+三个要点：
+
+1. **`ai.mode` 必须是 `direct`**。`workbuddy` 模式走任务队列，不读 `baseUrl`，
+   界面看着配好了其实一个字节都没发到本地服务。
+2. **每次自动备份**，文件名带时间戳，留在本地不入库；脚本不含任何真实 API Key，
+   打印配置变更时对 Key 脱敏。
+3. **`--fix-ping` 是等长原地补丁**：把 `lib/ai.js::ping()` 的 `max_tokens: 16`
+   改成 `512`，靠 `headers()` 里省一个空格抵消多出的 1 字节，asar 总长和所有文件
+   `offset/size` 都不变，**不用重打包**。改前备份 `app.asar`，且要求目标文本在包内
+   唯一、改完反向还原逐字节一致，否则直接跳过不改。
+
+换机器改脚本顶部的 `DATA` / `ASAR` 常量，以及 `TARGETS` 里的端口和模型 ID。
+中文路径由 Python 自己读写没问题；命令行参数保持英文，避开外部 exe 的 ANSI argv 坑。
 
 ---
 
